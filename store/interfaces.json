@@ -1,0 +1,6 @@
+{
+  "carouselslider": {
+    "component": "CarouselSlider",
+    "composition": "children"
+  }
+}

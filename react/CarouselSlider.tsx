@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, ReactChildren } from "react";
+import React, { useEffect, useRef, useState, useMemo, ReactChildren } from "react";
 import { Link, canUseDOM } from "vtex.render-runtime";
 
 // Styles
@@ -8,35 +8,54 @@ interface CarouselSliderProps {
   children: ReactChildren | any
   pauseOnHover: boolean
   autoFlip: boolean
+  maximumCycles: number
   secondsBetweenFlips: number
   showDots: boolean
   blockClass: string
 }
 
 const minimumFlipSeconds = 3;
+const intersectionThreshold = 0.5;
 
-const CarouselSlider: StorefrontFunctionComponent<CarouselSliderProps> = ({ children, autoFlip, pauseOnHover, secondsBetweenFlips, showDots }) => {
-  const windowWidth = useRef<number>(0);
+const CarouselSlider: StorefrontFunctionComponent<CarouselSliderProps> = ({ blockClass, children, autoFlip, maximumCycles, pauseOnHover, secondsBetweenFlips, showDots }) => {
+  const carouselApp = useRef<any>();
   const train = useRef<any>();
   const appTimer = useRef<any>();
+  const numberOfFlips = useRef(0);
 
-  const [pauseApp, setPauseApp] = useState(false);
+  const [hoverPause, setHoverPause] = useState(false);
+  const [viewPause, setViewPause] = useState(false);
   const [loopFlag, setLoopFlag] = useState(false);
+  const [mouseNavVersion, setMouseNavVersion] = useState(true);
   const [trainPosition, setTrainPosition] = useState(0);
   const [activeCar, setActiveCar] = useState(0);
-  const [hideSRSection, setHideSRSection] = useState(true);
+
+  const maximumFlips = useMemo(() => children.length * (maximumCycles || 10), []);
+  const flipDuration = useMemo(() => 3000 || (secondsBetweenFlips < minimumFlipSeconds ? minimumFlipSeconds : secondsBetweenFlips) * 1000, []);
 
   useEffect(() => {
-    // If AutoFlip is off or if a keyboard user has activated the SR section, prevent timer. - LM
-    if (!autoFlip || !hideSRSection) return;
+    // If autoFlip is off or if a keyboard user has navigated to the carousel, clear timer. - LM
+    if (!autoFlip || !mouseNavVersion) {
+      clearInterval(appTimer.current);
+      return;
+    }
 
-    appTimer.current = setTimeout(() => {
+    // We don't want the carousel to run infinitely if a user walks away.
+    // advanceTrain increments a counter and here we check if the count
+    // exceeds the maximum. The handleDotClick function will reset the count. - LM 
+    if (numberOfFlips.current >= maximumFlips) {
+      clearInterval(appTimer.current);
+      return;
+    }
+
+    appTimer.current = setInterval(() => {
+      if (viewPause) return;
       if (pauseOnHover) {
-        if (!pauseApp) advanceTrain();
+        if (!hoverPause) advanceTrain();
       } else {
         advanceTrain();
       }
-    }, (secondsBetweenFlips < minimumFlipSeconds ? minimumFlipSeconds : secondsBetweenFlips) * 1000);
+    }, flipDuration);
 
     return () => {
       clearInterval(appTimer.current);
@@ -44,20 +63,32 @@ const CarouselSlider: StorefrontFunctionComponent<CarouselSliderProps> = ({ chil
   });
 
   useEffect(() => {
-    train.current.addEventListener("transitionend", handleTrainStop);
+    if (!autoFlip) return;
 
-    return () => {
-      train.current.removeEventListener("transitionend", handleTrainStop);
-    }
-  });
+    const intersectionObserver = new IntersectionObserver(intersectingCallback, { threshold: intersectionThreshold });
+    intersectionObserver.observe(carouselApp.current);
+
+    return () => intersectionObserver.disconnect();
+  }, []);
+
+  // If carousel visibility is less than intersectionThreshold, pause autoFlip. - LM
+  const intersectingCallback = (carousel: any) => {
+    const isVisible = carousel[0].isIntersecting;
+    setViewPause(!isVisible);
+  }
 
   // Side effect for activeCar update gets current width of 
   // window in event the user has resized their browser - LM
   useEffect(() => {
     if (!canUseDOM) return;
 
-    windowWidth.current = window.innerWidth;
-    setTrainPosition(0 - (windowWidth.current * activeCar));
+    const windowWidth = window.innerWidth;
+    setTrainPosition(0 - (windowWidth * activeCar));
+  }, [activeCar]);
+
+  useEffect(() => {
+    train.current?.addEventListener("transitionend", handleTrainStop);
+    return () => train.current?.removeEventListener("transitionend", handleTrainStop);
   }, [activeCar]);
 
   // If activeCar is the duplicate first car, inactivate
@@ -66,74 +97,114 @@ const CarouselSlider: StorefrontFunctionComponent<CarouselSliderProps> = ({ chil
     if (activeCar >= children.length) {
       setLoopFlag(true);
       setActiveCar(0);
-      setTimeout(() => setLoopFlag(false), 500);
+
+      // Wait for render.
+      setTimeout(() => setLoopFlag(false), 250);
     }
   }
 
   const advanceTrain = () => {
+    numberOfFlips.current = numberOfFlips.current + 1;
     setActiveCar(activeCar + 1);
   }
 
   const handleDotClick = (e: any) => {
     const clickedDot = Number(e.target.dataset.number);
     setActiveCar(clickedDot);
+    numberOfFlips.current = 0;
   }
 
-  const pauseAppTimer = () => {
-    setPauseApp(true);
+  const hoverPauseTimer = () => {
+    setHoverPause(true);
   }
 
   const resumeAppTimer = () => {
-    setPauseApp(false);
+    setHoverPause(false);
   }
 
-  const showSRSection = () => {
-    setHideSRSection(false);
-  }
+  // When a keyboard user navigates to a <HideCarouselButton /> button,
+  // the carousel will be turned off and the content will stack in an overflow
+  // panel that is easier to navigate for a keyboard user. Then will focus the 
+  // first or final link in the list depending on navigation direction. - LM
+  const setToKeyboardNav = (props: any) => {
+    setMouseNavVersion(false);
 
-  return (<>
-    <section aria-labelledby="featuredContentTitle" data-sr-only={hideSRSection}>
-      <h2 id="featuredContentTitle" className={styles.srFeaturedTitle}>Featured Links</h2>
-      {hideSRSection && <button onFocus={showSRSection}></button>}
-      <ul className={styles.srList} aria-labelledby="featuredContentTitle">
-        {children.map((child: any, index: number) => (
-          <li key={`fc-${index}`} className={styles.srListItem}>
-            {child}
-          </li>
-        ))}
-      </ul>
-    </section>
+    // Wait for render.
+    setTimeout(() => {
+      if (props.top) train.current.scrollTop = 0;
 
-    {/* The below section is not WCAG compliant so it is hidden from the accessibility tree
-    and the content is duplicated above in a more easily navigatable style. Keyboard users
-    who navigate with the TAB key will trigger this above content to be visible. - LM */}
+      const allLinks = train.current.querySelectorAll("a");
+      const firstLink = allLinks[0];
+      const finalLink = allLinks[allLinks.length - 1];
 
-    <section aria-hidden="true" className={styles.container} onMouseEnter={pauseAppTimer} onMouseLeave={resumeAppTimer} style={{ display: `${hideSRSection ? "block" : "none"}` }}>
-      <div className={styles.tracks}>
-        <div ref={train} style={{ transform: `translateX(${trainPosition}px)` }} data-loop={loopFlag} className={styles.train}>
-          {children.map((child: any, index: number) => (
-            <div key={`car-${index}`} className={styles.car}>{child}</div>
-          ))}
-          <div data-duplicate-first-car className={styles.car}>
-            {children[0]}
-          </div>
-        </div>
-      </div>
-      {showDots &&
-        <div className={styles.dotsContainer}>
-          {children.map((child: any, index: number) => (
-            <button
-              key={child.props.id}
-              tabIndex={-1}
-              data-number={index}
-              data-active-dot={activeCar === index ? "true" : "false"}
-              onClick={handleDotClick}
-              className={styles.dot} ></button>
-          ))}
-        </div>
+      if (props.top && firstLink) {
+        firstLink.focus();
       }
+
+      if (props.bottom && finalLink) {
+        finalLink.focus();
+      }
+
+    }, 1);
+  }
+
+  const HideCarouselButton = (props: any) => (
+    <button data-sr-only={mouseNavVersion} onFocus={() => setToKeyboardNav(props)} aria-hidden="true">
+      Switch List To Keyboard Friendly Navigation on Focus
+    </button>
+  );
+
+  return (
+    <section ref={carouselApp}
+      onMouseEnter={hoverPauseTimer}
+      onMouseLeave={resumeAppTimer}
+      aria-labelledby="featuredContentTitle"
+      data-stack-content={mouseNavVersion ? "false" : "true"}
+      className={`${styles.container}--${blockClass}`}>
+
+      <h2 id="featuredContentTitle" className={`${styles.srFeaturedTitle}--${blockClass}`}>Featured Links</h2>
+
+      {mouseNavVersion && <HideCarouselButton top />}
+
+      <div className={`${styles.container}--${blockClass}`}>
+        <div className={`${styles.tracks}--${blockClass}`}>
+          <ul
+            ref={train}
+            tabIndex={-1}
+            aria-labelledby="featuredContentTitle"
+            style={{ transform: mouseNavVersion ? `translateX(${trainPosition}px)` : "none" }}
+            data-loop={loopFlag}
+            className={`${styles.train}--${blockClass}`}>
+
+            {children.map((child: any, index: number) => (
+              <li key={`car-${index}`} className={`${styles.car}--${blockClass}`}>{child}</li>
+            ))}
+
+            {mouseNavVersion &&
+              <li aria-hidden="true" data-duplicate-first-car className={`${styles.car}--${blockClass}`}>
+                {children[0]}
+              </li>}
+
+          </ul>
+        </div>
+
+        {showDots && mouseNavVersion &&
+          <div className={`${styles.dotsContainer}--${blockClass}`}>
+            {children.map((child: any, index: number) => (
+              <button
+                key={child.props.id}
+                tabIndex={-1}
+                aria-hidden="true"
+                data-number={index}
+                data-active-dot={activeCar === index ? "true" : "false"}
+                onClick={handleDotClick}
+                className={`${styles.dot}--${blockClass}`} ></button>
+            ))}
+          </div>}
+      </div>
+
+      {mouseNavVersion && <HideCarouselButton bottom />}
     </section>
-  </>
   );
 };
 
@@ -162,4 +233,3 @@ CarouselSlider.schema = {
 };
 
 export default CarouselSlider;
-

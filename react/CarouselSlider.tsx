@@ -31,7 +31,7 @@ const CarouselSlider: StorefrontFunctionComponent<CarouselSliderProps> = ({ bloc
   const [activeCar, setActiveCar] = useState(0);
 
   const maximumFlips = useMemo(() => children.length * (maximumCycles || 10), []);
-  const flipDuration = useMemo(() => 3000 || (secondsBetweenFlips < minimumFlipSeconds ? minimumFlipSeconds : secondsBetweenFlips) * 1000, []);
+  const flipDuration = useMemo(() => (secondsBetweenFlips < minimumFlipSeconds ? minimumFlipSeconds : secondsBetweenFlips) * 1000, []);
 
   useEffect(() => {
     // If autoFlip is off or if a keyboard user has navigated to the carousel, clear timer. - LM
@@ -43,7 +43,7 @@ const CarouselSlider: StorefrontFunctionComponent<CarouselSliderProps> = ({ bloc
     // We don't want the carousel to run infinitely if a user walks away.
     // advanceTrain increments a counter and here we check if the count
     // exceeds the maximum. The handleDotClick function will reset the count. - LM 
-    if (numberOfFlips.current >= maximumFlips) {
+    if (maximumFlips > 0 && numberOfFlips.current >= maximumFlips) {
       clearInterval(appTimer.current);
       return;
     }
@@ -227,6 +227,12 @@ CarouselSlider.schema = {
     },
     secondsBetweenFlips: {
       title: "Seconds Between Flips",
+      type: "number"
+    },
+    maximumCycles: {
+      title: "Maximum Cycles",
+      description: "Set to 0 for infinite.",
+      default: 0,
       type: "number"
     }
   }
